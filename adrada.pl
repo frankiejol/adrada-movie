@@ -8,6 +8,8 @@ use Data::Dumper;
 use Getopt::Long;
 use Image::Size;
 use IPC::Run3 qw(run3);
+use Time::Local;
+use Image::ExifTool qw(:Public);
 
 my $WIDTH = 800;
 my $HEIGHT = 450 ;
@@ -20,12 +22,17 @@ my $FPS_SLOW = 18;
 my $SLOW;
 my $TIDY;
 my $HELP;
+my ($VERBOSE, $DEBUG) = ( 0 );
+
+$VERBOSE = 1 if $ENV{TERM};
 
 GetOptions(
      'audio=s' => \$AUDIO_FILE
     ,'width=s' => \$WIDTH
     ,'fps-slow=s' => \$FPS_SLOW
     ,'video-duration=s' => \$VIDEO_DURATION
+   ,'verbose+' => \$VERBOSE
+       ,debug  => \$DEBUG
         ,slow  => \$SLOW
         ,tidy  => \$TIDY
         ,help  => \$HELP
@@ -59,6 +66,31 @@ my %COUNT;
 my @ENCODER;
 
 ##############################################
+
+sub exif_date {
+    my $file = shift;
+    my $info = exif_info($file) or return;
+    my $date = ($info->{MediaCreateDate} || $info->{CreateDate});
+    die "No date in exif ".Dumper($info) if !$date;
+
+    my ($y,$month,$day, $h,$min,$s) 
+        = $date =~ /(\d+):(\d+):(\d+) (\d+):(\d+):(\d+)/;
+
+    die "No info from '$date'" if !$y;
+    $month--;
+    my $time = timelocal($s, $min, $h, $day, $month, $y);
+    return $time;
+}
+
+sub exif_info{
+    my $file = shift;
+    my $info = ImageInfo($file);
+    for (keys %$info) {
+        delete $info->{$_} if !/date/i;
+    }
+    return $info;
+}
+
 sub list_files {
     my $dir = shift;
 
@@ -72,8 +104,12 @@ sub list_files {
         next if !$EXT_IMG{lc($ext)}
             && !$EXT_VIDEO{lc($ext)};
         next if ! -f $file;
-        my @stat = stat($file) or die "I can't stat $file";
-        $pic{$file} = { date => $stat[9]};
+        my $date = exif_date($file);# if $EXT_IMG{lc($ext)};
+        if (!$date) {
+            my @stat = stat($file) or die "I can't stat $file";
+            $date = $stat[9];
+        }
+        $pic{$file} = { date => $date};
     }
     return \%pic;
 }
@@ -104,8 +140,8 @@ sub convert_ts {
         ,$video_out
     );
     my ($in, $out, $err);
-    print("Converting $video_in to ts\n");
-    warn join(" ",@cmd)."\n";
+    print("Converting $video_in to ts\n")   if $VERBOSE;
+    print join(" ",@cmd)."\n"               if $DEBUG;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
     return $video_out;
@@ -141,8 +177,8 @@ sub join_videos {
         ,@ENCODER
         ,'-y',$file_out);
     my ($in, $out, $err);
-    warn join(" ",@cmd)."\n";
-    print("Joining videos\n");
+    print join(" ",@cmd)."\n"        if $DEBUG;
+    print("Joining videos\n")       if $VERBOSE;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
 
@@ -191,9 +227,9 @@ sub create_slideshow {
                 ,@ENCODER
             );
     push @cmd, ('-b:v','1000k','-an','-y',$video);
-    warn join(" ",@cmd)."\n";
+    print("Creating slideshow $video\n")    if $VERBOSE;
+    print join(" ",@cmd)."\n"               if $DEBUG;
     my ($in, $out, $err);
-    print("creating $video\n");
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
 
@@ -207,8 +243,8 @@ sub convert_scale {
             , "png24:$file_out");
     my ($in, $out, $err);
 
-    print("scaling to $file_out\n");
-    warn join(" ",@cmd)."\n";
+    print("scaling to $file_out\n")     if $VERBOSE>1;
+    print join(" ",@cmd)."\n"           if $DEBUG;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
 }
@@ -223,8 +259,8 @@ sub convert_crop {
             , "png24:$file_out");
     my ($in, $out, $err);
 
-    print("cropping to $file_out\n");
-    warn join(" ",@cmd)."\n";
+    print("cropping to $file_out\n")    if $VERBOSE>1;
+    print join(" ",@cmd)."\n"           if $DEBUG;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
 }
@@ -269,7 +305,7 @@ sub fit_img {
             , "png24:$file_scaled");
         my ($in, $out, $err);
 
-        print("scaling $file_in\n");
+        print("Scaling $file_in\n")     if $VERBOSE>1;
         run3(\@cmd, \$in, \$out, \$err);
         die $err if $?;
     }
@@ -284,7 +320,7 @@ sub fit_img {
         my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
         my $msg = "cropping $size $file_out";
         $msg .= " -brightness $brightness"  if $brightness;
-        print "$msg\n";
+        print "$msg\n"  if $VERBOSE>1;
         my @cmd = ( 'convert');
         
         push @cmd,( $file_scaled,'-crop',$size
@@ -341,11 +377,14 @@ sub effect_zoomin {
     my $n = shift;
 
     my @scaled;
+    print "Zoom in $image\n"    if $VERBOSE;
     for my $offset ( 0 .. $FRAME_RATE ) {
+        print "." if $VERBOSE == 1;
         my $out = tmp_file($n,'png' );
         zoomin_image($image, $out, $offset*2);
         push @scaled,($out);
     }
+    print "\n"  if $VERBOSE == 1;
     return @scaled;
 }
 
@@ -354,6 +393,8 @@ sub fadein_image {
     my $n = shift;
     my $long = shift;
     die "Missing group number"  if !defined $n;
+
+    print "Fade in $image\n" if $VERBOSE;
 
     my $r = $FRAME_RATE;
     my $r0;
@@ -365,6 +406,7 @@ sub fadein_image {
     for my $n2 ( $r0 .. $r ) {
             my $out = tmp_file($n,'png' );
             my $brightness = int (( $r - $n2 )/$r*100);
+            print "."       if $VERBOSE== 1;
             fit_img($image, $out, $offset, -$brightness)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
@@ -373,12 +415,14 @@ sub fadein_image {
     $r0 = $r/2;
     for my $n2 ( $r0+1 .. $r+2 ){
             my $out = tmp_file($n,'png' );
+            print "."       if $VERBOSE== 1;
             fit_img($image, $out, $offset, )
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
             $offset+=2;
         
     }
+    print "\n";
     return @scaled;
 }
 sub fadein_image_slow {
@@ -493,8 +537,7 @@ sub remove_empty_groups {
     }
     return if !$changes;
 
-    warn "removed something";
-    $groups = [@groups2];
+    @$groups = @groups2;
 
 }
 
