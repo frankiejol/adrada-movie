@@ -26,13 +26,14 @@ my ($VERBOSE, $DEBUG) = ( 0 );
 my $INFO;
 my $FONT_COLOR = 'white';
 my $SHOW_DATES;
-
+my $AUDIO_START;
 $VERBOSE = 1 if $ENV{TERM};
 
 GetOptions(
      'audio=s' => \$AUDIO_FILE
     ,'width=s' => \$WIDTH
     ,'fps-slow=s' => \$FPS_SLOW
+    ,'audio-start=s' => \$AUDIO_START
     ,'video-duration=s' => \$VIDEO_DURATION
    ,'verbose+' => \$VERBOSE
    ,'show-dates' => \$SHOW_DATES
@@ -46,6 +47,10 @@ GetOptions(
 die "Missing audio file '$AUDIO_FILE"
     if $AUDIO_FILE && !-e $AUDIO_FILE;# || !stat($AUDIO_FILE);
 
+if ($AUDIO_START && !$AUDIO_FILE) {
+    warn "ERROR: Audio start requires audio input\n";
+    $HELP=1;
+}
 if ($HELP) {
     my ($me) = $0 =~ m{.*/(.*)};
     print "$me [--help] [--width=$WIDTH] [--slow] [--tidy]"
@@ -59,6 +64,7 @@ if ($HELP) {
         ."\t--video-duration : trims videos to this duration, defaults "
             ."to $VIDEO_DURATION\n"
         ."\t--audio: add this audio file to the final video\n"
+        ."\t--audio-start: seeks in the input audio file to position\n"
         ."\t--info: add info about the original file in each frame\n"
         ."\t--show-dates: show found dates for the found files\n"
     ;
@@ -187,6 +193,7 @@ sub join_videos {
 
     my $file_inputs = create_inputs($files);
     my @cmd = ('ffmpeg' );
+    push @cmd,('-ss',$AUDIO_START)  if $AUDIO_START;
     push @cmd,('-i',$AUDIO_FILE ) if $AUDIO_FILE;
 #        ,'"concat:'.join("|",@$files)."'"
     push @cmd,(
