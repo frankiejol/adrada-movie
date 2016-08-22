@@ -23,6 +23,9 @@ my $SLOW;
 my $TIDY;
 my $HELP;
 my ($VERBOSE, $DEBUG) = ( 0 );
+my $INFO;
+my $FONT_COLOR = 'white';
+my $SHOW_DATES;
 
 $VERBOSE = 1 if $ENV{TERM};
 
@@ -32,6 +35,8 @@ GetOptions(
     ,'fps-slow=s' => \$FPS_SLOW
     ,'video-duration=s' => \$VIDEO_DURATION
    ,'verbose+' => \$VERBOSE
+   ,'show-dates' => \$SHOW_DATES
+        ,info  => \$INFO
        ,debug  => \$DEBUG
         ,slow  => \$SLOW
         ,tidy  => \$TIDY
@@ -54,6 +59,8 @@ if ($HELP) {
         ."\t--video-duration : trims videos to this duration, defaults "
             ."to $VIDEO_DURATION\n"
         ."\t--audio: add this audio file to the final video\n"
+        ."\t--info: add info about the original file in each frame\n"
+        ."\t--show-dates: show found dates for the found files\n"
     ;
     exit;
 }
@@ -64,8 +71,18 @@ my %EXT_VIDEO = map { lc($_) => 1 } qw( mov 3gp mp4 ts avi);
 
 my %COUNT;
 my @ENCODER;
+my $DRAWTEXT;
 
 ##############################################
+
+sub show_dates {
+    my $files = shift;
+    for my $file ( sort { $files->{$a}->{date} <=> $files->{$b}->{date} } keys %$files ) {
+        my ($name) = $file =~ m{.*/(.*)};
+        print "$name : ".localtime($files->{$file}->{date})."\n";
+    }
+    exit;
+}
 
 sub exif_date {
     my $file = shift;
@@ -79,6 +96,7 @@ sub exif_date {
     die "No info from '$date'" if !$y;
     $month--;
     my $time = timelocal($s, $min, $h, $day, $month, $y);
+
     return $time;
 }
 
@@ -90,6 +108,7 @@ sub exif_info{
     }
     return $info;
 }
+
 
 sub list_files {
     my $dir = shift;
@@ -133,6 +152,10 @@ sub convert_ts {
         ,'-strict','experimental'
         ,'-s',"${WIDTH}x$HEIGHT"
         );
+
+    my ($label) = $video_in =~ m{.*/(.*)};
+    $label = $video_in if !$label;
+    push @cmd,("-vf","$DRAWTEXT=text=$label:fontsize=50:fontcolor=$FONT_COLOR")   if $INFO;
     push @cmd,('-t',$VIDEO_DURATION)    if $VIDEO_DURATION;
     push @cmd,('-an')                   if $SLOW;
     push @cmd,(
@@ -250,19 +273,23 @@ sub convert_scale {
 }
 
 sub convert_crop {
-    my ($file_in, $file_out, $geo) = @_;
+    my ($file_in, $file_out, $geo, $label) = @_;
     return if -e $file_out && -s $file_out;
     my @cmd = ('convert', '-depth', 24
             , '-page',$geo
             , $file_in
             , '-crop',$geo
-            , "png24:$file_out");
+    );
+    push @cmd,('-fill', $FONT_COLOR, '-gravity','center', '-pointsize', int($HEIGHT/6),'-annotate','-0+0',$label)
+        if $label;
+    push @cmd,( "png24:$file_out");
     my ($in, $out, $err);
 
     print("cropping to $file_out\n")    if $VERBOSE>1;
     print join(" ",@cmd)."\n"           if $DEBUG;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
+
 }
 
 
@@ -286,12 +313,14 @@ sub zoomin_image {
     convert_scale($file_cropped, $file_scaled2, $WIDTH);
 
     # 4. crop to width height
-    convert_crop($file_scaled2, $file_out, "${WIDTH}x$HEIGHT+0+0");
+    my ($label) = $file_in =~ m{.*/(.*)};
+    $label = $file_in if !$label;
+    convert_crop($file_scaled2, $file_out, "${WIDTH}x$HEIGHT+0+0", $label);
 
 }
 
 sub fit_img {
-    my ($file_in, $file_out, $offset, $brightness) = @_;
+    my ($file_in, $file_out, $offset, $brightness, $label) = @_;
     $offset = 0 if !$offset;
 #convert -scale 800 IMG_934$i.JPG a.png ; convert a.png -crop 800x532+0+0 input$i.png
     my ($name) = $file_in =~ m{.*/(.*)\.\w+};
@@ -306,15 +335,16 @@ sub fit_img {
         my ($in, $out, $err);
 
         print("Scaling $file_in\n")     if $VERBOSE>1;
+        print join(" ",@cmd)."\n"           if $DEBUG;
         run3(\@cmd, \$in, \$out, \$err);
         die $err if $?;
     }
 
     my ($x, $y) = imgsize($file_scaled);
-    my ($x2, $y2);
+    my ($x2, $y2) = ($x, $y);
     $x2 = $x-1 if $x % 2;
     $y2 = $y-1 if $y % 2;
-    if ( $y2 != $HEIGHT || $x2 != $WIDTH || $offset || $brightness) { # crop
+    if ( $y2 != $HEIGHT || $x2 != $WIDTH || $offset || $brightness || $label) { # crop
         $x2 = $x if !$x2;
         $y2 = $y if !$y2;
         my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
@@ -325,6 +355,9 @@ sub fit_img {
         
         push @cmd,( $file_scaled,'-crop',$size
             ,'-depth',24);
+        push @cmd,('-fill', 'black', '-gravity','center', '-pointsize', int($HEIGHT/6)
+                    ,'-annotate','-0+0',$label)
+            if $label;
         # label ?
         push @cmd,('-brightness-contrast',$brightness)   if $brightness;
         push @cmd,("png24:$file_out");
@@ -396,6 +429,9 @@ sub fadein_image {
 
     print "Fade in $image\n" if $VERBOSE;
 
+    my ($label) = $image =~ m{.*/(.*)};
+    $label = $image if !$label;
+
     my $r = $FRAME_RATE;
     my $r0;
     $r0 = $r/2;
@@ -407,7 +443,7 @@ sub fadein_image {
             my $out = tmp_file($n,'png' );
             my $brightness = int (( $r - $n2 )/$r*100);
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, -$brightness)
+            fit_img($image, $out, $offset, -$brightness, $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
             $offset+=2;
@@ -416,7 +452,7 @@ sub fadein_image {
     for my $n2 ( $r0+1 .. $r+2 ){
             my $out = tmp_file($n,'png' );
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, )
+            fit_img($image, $out, $offset, undef, $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
             $offset+=2;
@@ -607,9 +643,31 @@ sub init_encoder {
     }
 }
 
+sub init_drawtext {
+    return if !$INFO;
+
+    my @cmd = ( 'ffmpeg','-filters');
+    my ($in, $out, $err);
+
+    run3(\@cmd, \$in, \$out, \$err);
+    for my $line (split /\n/,$out) {
+        my ($filter) = $line =~ /\s+T.*? (\w\w+) /;
+        next if !$filter;
+        if ($filter=~ /drawtext/) {
+            $DRAWTEXT = $filter;
+            last;
+        }
+    }
+    if (!$DRAWTEXT && $INFO) {
+        die "ffmpeg drawtext filter not available, compile it with libfreetype\n";
+    }
+
+}
+
 sub init {
     mkdir $DIR_TMP if ! -e $DIR_TMP;
     init_encoder();
+    init_drawtext();
 }
 
 sub move_last_image {
@@ -628,6 +686,8 @@ $dir =~ s{/$}{};
 
 my $out = "$dir.mp4";
 my $files = list_files($dir);
+
+show_dates($files) if $SHOW_DATES;
 
 my $groups = group_files($files);
 move_last_image($groups);
