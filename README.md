@@ -6,3 +6,7 @@ Creates a movie from a bunch of short videos, pictures and an audio file
 - perl
 - some perl modules
 - ImageMagick
+
+## Perl modules
+
+- libimage-exiftool-perl
