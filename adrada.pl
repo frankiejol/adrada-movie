@@ -659,6 +659,7 @@ sub init_encoder {
             @ENCODER = ('-c:v',$encoder);
         }
     }
+    push @ENCODER,('-pix_fmt','yuv420');
 }
 
 sub init_drawtext {
