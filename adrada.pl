@@ -497,7 +497,7 @@ sub scale_images {
 
     my @scaled;
 
-    push @scaled,fadein_image($images->[0], $n);
+    push @scaled,fadein_image_slow($images->[0], $n);
     for my $index (1 .. $#$images) {
         push @scaled,random_effect_image($images->[$index], $n);
     }
@@ -548,7 +548,7 @@ sub build_slideshows {
         $n++;
     }
     return if !$last_image;
-    push @$groups,fadeout_image($last_image,$n);
+    push @$groups,fadeout_image_slow($last_image,$n);
 }
 
 sub fadeout_image {
@@ -560,12 +560,36 @@ sub fadeout_image {
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         my $brightness = int ( $n2 /$r*100);
-        fit_img($file, $out, $n2*2, -$brightness)
+        fit_img($file, $out, $n2, -$brightness)
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
    }
    return create_slideshow(\@scaled, $r);
 }
+
+sub fadeout_image_slow {
+    my $file = shift;
+    my $n = shift;
+
+    my $r = $FRAME_RATE;
+    my @scaled;
+    for ( 0 .. $r ) {
+        my $out = tmp_file($n,'png' );
+        fit_img($file, $out)
+                    if ! -e $out || ! -s $out;
+        push @scaled,($out);
+    }
+
+    for my $n2 ( 0 .. $r ) {
+        my $out = tmp_file($n,'png' );
+        my $brightness = int ( $n2 /$r*100);
+        fit_img($file, $out, $n2, -$brightness)
+                    if ! -e $out || ! -s $out;
+        push @scaled,($out);
+   }
+   return create_slideshow(\@scaled, $r);
+}
+
 
 sub search_last_image {
     my $groups = shift;
