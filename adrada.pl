@@ -141,6 +141,7 @@ sub list_files {
 
 sub convert_ts {
     my $video_in = shift;
+    confess "Missing video in" if !$video_in;
     my $n = shift;
 
     my $video_out = tmp_file($n,'ts');
@@ -692,6 +693,7 @@ my $dir = ($ARGV[0] or '.');
 $dir =~ s{/$}{};
 
 my $out = "$dir.mp4";
+$out =~ s{.*/}{};
 my $files = list_files($dir);
 
 show_dates($files) if $SHOW_DATES;
