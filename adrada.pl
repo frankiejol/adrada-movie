@@ -26,8 +26,10 @@ my ($VERBOSE, $DEBUG) = ( 0 );
 my $INFO;
 my $FONT_COLOR = 'white';
 my $SHOW_DATES;
+my $SHOW_GROUPS;
 my $AUDIO_START;
 $VERBOSE = 1 if $ENV{TERM};
+my @PREFERRED_FORMATS = qw(yuv420p);
 
 GetOptions(
      'audio=s' => \$AUDIO_FILE
@@ -37,6 +39,7 @@ GetOptions(
     ,'video-duration=s' => \$VIDEO_DURATION
    ,'verbose+' => \$VERBOSE
    ,'show-dates' => \$SHOW_DATES
+   ,'show-groups' => \$SHOW_GROUPS
         ,info  => \$INFO
        ,debug  => \$DEBUG
         ,slow  => \$SLOW
@@ -67,6 +70,7 @@ if ($HELP) {
         ."\t--audio-start: seeks in the input audio file to position\n"
         ."\t--info: add info about the original file in each frame\n"
         ."\t--show-dates: show found dates for the found files\n"
+        ."\t--show-groups: show how we files are being grouped\n"
     ;
     exit;
 }
@@ -583,7 +587,7 @@ sub remove_empty_groups {
     my $changes = 0;
     my @groups2;
     for my $item (@$groups) {
-        if ( ref $item && !defined $item->[0] ) {
+        if (!defined $item || ( ref $item && !defined $item->[0]) ) {
             $changes++;
             next;
         }
@@ -659,7 +663,24 @@ sub init_encoder {
             @ENCODER = ('-c:v',$encoder);
         }
     }
-    push @ENCODER,('-pix_fmt','yuv420');
+}
+
+sub init_format {
+    my @cmd = ( 'ffmpeg','-pix_fmts');
+    my ($in, $out, $err);
+
+    my %format;
+    run3(\@cmd, \$in, \$out, \$err);
+    for my $line (split /\n/,$out) {
+        my ($found) = $line =~ /\s.E.*? (\w\w+) /;
+        next if !$found;
+        $format{$found}++;
+    }
+    for (@PREFERRED_FORMATS) {
+        next if !$format{$_};
+        push @ENCODER,('-pix_fmt',$_);
+        last;
+    }
 }
 
 sub init_drawtext {
@@ -686,6 +707,7 @@ sub init_drawtext {
 sub init {
     mkdir $DIR_TMP if ! -e $DIR_TMP;
     init_encoder();
+    init_format();
     init_drawtext();
 }
 
@@ -712,6 +734,8 @@ show_dates($files) if $SHOW_DATES;
 my $groups = group_files($files);
 move_last_image($groups);
 $groups = tidy_groups($groups) if $TIDY;
+die Dumper($groups) if $SHOW_GROUPS;
+
 set_tmp_dir($groups);
 build_slideshows($groups);
 join_videos($groups, $out);
