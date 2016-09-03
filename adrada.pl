@@ -289,7 +289,7 @@ sub convert_crop {
             , '-crop',$geo
     );
     push @cmd,('-fill', $FONT_COLOR, '-gravity','center', '-pointsize', int($HEIGHT/6),'-annotate','-0+0',$label)
-        if $label;
+        if $label && $INFO;
     push @cmd,( "png24:$file_out");
     my ($in, $out, $err);
 
@@ -365,7 +365,7 @@ sub fit_img {
             ,'-depth',24);
         push @cmd,('-fill', 'black', '-gravity','center', '-pointsize', int($HEIGHT/6)
                     ,'-annotate','-0+0',$label)
-            if $label;
+            if $label && $INFO;
         # label ?
         push @cmd,('-brightness-contrast',$brightness)   if $brightness;
         push @cmd,("png24:$file_out");
@@ -419,12 +419,22 @@ sub effect_zoomin {
 
     my @scaled;
     print "Zoom in $image\n"    if $VERBOSE;
-    for my $offset ( 0 .. $FRAME_RATE ) {
+    my $offset = 0;
+    for ( 0 .. $FRAME_RATE ) {
         print "." if $VERBOSE == 1;
         my $out = tmp_file($n,'png' );
         zoomin_image($image, $out, $offset*2);
+        $offset++;
         push @scaled,($out);
     }
+    for ( 0 .. $FRAME_RATE/2 ) {
+        print "." if $VERBOSE == 1;
+        my $out = tmp_file($n,'png' );
+        zoomin_image($image, $out, $offset*2);
+        $offset++;
+        push @scaled,($out);
+    }
+
     print "\n"  if $VERBOSE == 1;
     return @scaled;
 }
