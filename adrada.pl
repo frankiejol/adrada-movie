@@ -10,6 +10,7 @@ use Image::Size;
 use IPC::Run3 qw(run3);
 use Time::Local;
 use Image::ExifTool qw(:Public);
+use Image::Magick;
 
 my $WIDTH = 800;
 my $HEIGHT = 450 ;
@@ -17,6 +18,7 @@ my $HEIGHT = 450 ;
 my $DIR_TMP = "/var/tmp/img";
 my $VIDEO_DURATION = 10;
 my $AUDIO_FILE;
+my $DEPTH = 12;
 my $FRAME_RATE = 24;
 my $FPS_SLOW = 18;
 my $SLOW;
@@ -274,7 +276,7 @@ sub create_slideshow {
 sub convert_scale {
     my ($file_in, $file_out, $width) = @_;
     return if -e $file_out && -s $file_out;
-    my @cmd = ('convert','-depth', 24,'-scale',$width, $file_in
+    my @cmd = ('convert','-depth', $DEPTH,'-scale',$width, $file_in
             , "png24:$file_out");
     my ($in, $out, $err);
 
@@ -287,7 +289,7 @@ sub convert_scale {
 sub convert_crop {
     my ($file_in, $file_out, $geo, $label) = @_;
     return if -e $file_out && -s $file_out;
-    my @cmd = ('convert', '-depth', 24
+    my @cmd = ('convert', '-depth', $DEPTH
             , '-page',$geo
             , $file_in
             , '-crop',$geo
@@ -331,7 +333,54 @@ sub zoomin_image {
 
 }
 
-sub fit_img {
+sub fit_img_pp {
+    my ($file_in, $file_out, $offset, $brightness, $label) = @_;
+    $offset = 0 if !$offset;
+    my ($name) = $file_in =~ m{.*/(.*)\.\w+};
+    confess "No name found in $file_in" if !$name;
+    my $file_scaled = "$DIR_TMP/$name.png";
+
+    my $width = $WIDTH;
+    $width = $width + $FRAME_RATE * 4 if defined $offset;
+    my $in = Image::Magick->new();
+    my $err = $in->Read($file_in);
+    confess $err if $err;
+
+    print("Scaling $width $file_in\n")     if $VERBOSE;
+    $err = $in->Scale(geometry => ${width});
+    confess $err if $err;
+
+    if ( !$offset && !$brightness && !$label) { # crop
+        $in->Write($file_out);
+        return;
+    }
+    my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
+    my $msg = "cropping $size $file_out";
+    $msg .= " -brightness $brightness"  if $brightness;
+    print "$msg\n"  if $VERBOSE;
+
+    $in->Crop( geometry => $size );
+    $in->Modulate( brightness => $brightness );
+    
+=pod
+
+    TODO annotate image
+
+    push @cmd,('-fill', 'black', '-gravity','center', '-pointsize', int($HEIGHT/6)
+                    ,'-annotate','-0+0',$label)
+            if $label && $INFO;
+        # label ?
+
+=cut
+
+#    $in->Set (depth => 8);
+#    $in->Set(type => 'TrueColor');
+#    $in->Normalize( channel => 'RGB' );
+    $in->Write("png24:$file_out");
+    warn "wrote $file_out";
+}
+
+sub fit_img_run {
     my ($file_in, $file_out, $offset, $brightness, $label) = @_;
     $offset = 0 if !$offset;
 #convert -scale 800 IMG_934$i.JPG a.png ; convert a.png -crop 800x532+0+0 input$i.png
@@ -342,7 +391,7 @@ sub fit_img {
     if (! -e $file_scaled || ! -s $file_scaled ) {
         my $width = $WIDTH;
         $width = $width + $FRAME_RATE * 4 if defined $offset;
-        my @cmd = ('convert','-depth', 24,'-scale',$width, $file_in
+        my @cmd = ('convert','-depth', $DEPTH,'-scale',$width, $file_in
             , "png24:$file_scaled");
         my ($in, $out, $err);
 
@@ -366,7 +415,7 @@ sub fit_img {
         my @cmd = ( 'convert');
         
         push @cmd,( $file_scaled,'-crop',$size
-            ,'-depth',24);
+            ,'-depth', $DEPTH);
         push @cmd,('-fill', 'black', '-gravity','center', '-pointsize', int($HEIGHT/6)
                     ,'-annotate','-0+0',$label)
             if $label && $INFO;
@@ -379,6 +428,10 @@ sub fit_img {
     } else {
         copy($file_scaled, $file_out);
     }
+}
+
+sub fit_img {
+    return fit_img_pp(@_);
 }
 
 sub tmp_n {
@@ -696,7 +749,7 @@ sub init_format {
     my %format;
     run3(\@cmd, \$in, \$out, \$err);
     for my $line (split /\n/,$out) {
-        my ($found) = $line =~ /\s.E.*? (\w\w+) /;
+        my ($found) = $line =~ /.O.*? (\w\w+) /;
         next if !$found;
         $format{$found}++;
     }
