@@ -321,6 +321,7 @@ sub convert_crop {
 
 sub zoomin_image {
     my ($file_in, $file_out, $offset) = @_;
+
     # 1. scale to size
     my ($name) = $file_in =~ m{.*/(.*)\.\w+};
     my $file_scaled = "$DIR_TMP/work/$name.sc.$WIDTH.png";
@@ -341,13 +342,16 @@ sub zoomin_image {
     # 4. crop to width height
     my ($label) = $file_in =~ m{.*/(.*)};
     $label = $file_in if !$label;
-    convert_crop($file_scaled2, $file_out, "${WIDTH}x$HEIGHT+0+0", $label);
+    convert_crop($file_scaled2, $file_out, "${WIDTH}x$HEIGHT+0+0!", $label);
 
 }
 
 sub fit_img_pp {
     my ($file_in, $file_out, $offset, $brightness, $label) = @_;
     $offset = 0 if !$offset;
+
+    confess "Offset negatiu" if $offset<0;
+
     my ($name) = $file_in =~ m{.*/(.*)\.\w+};
     confess "No name found in $file_in" if !$name;
     my $file_scaled = "$DIR_TMP/$name.png";
@@ -500,15 +504,15 @@ sub effect_zoomin {
     for ( 0 .. $FRAME_RATE ) {
         print "." if $VERBOSE == 1;
         my $out = tmp_file($n,'png' );
-        zoomin_image($image, $out, $offset*2);
+        zoomin_image($image, $out, $offset);
         $offset++;
         push @scaled,($out);
     }
     for ( 0 .. $FRAME_RATE/2 ) {
         print "." if $VERBOSE == 1;
         my $out = tmp_file($n,'png' );
-        zoomin_image($image, $out, $offset*2);
-        $offset++;
+        zoomin_image($image, $out, int $offset);
+        $offset += 0.5;
         push @scaled,($out);
     }
 
@@ -533,7 +537,7 @@ sub fadein_image {
     $r0 = 0     if $long;
 
     my @scaled;
-    my $offset =0;
+    my $offset = $r-$r0;
     for my $n2 ($r0 .. $r ) {
             my $out = tmp_file($n,'png' );
             my $brightness = 100 - int (( $r - $n2 )/2/$r*100);
@@ -541,21 +545,20 @@ sub fadein_image {
             fit_img($image, $out, $offset, $brightness, $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
-            $offset+=2;
+            $offset-- if $offset>0;
     }
     $r0 = $r/2;
     $r0 = 0 if $long;
     $r+= $FRAME_RATE if $long;
-    $r+= $FRAME_RATE*5 if $long && $SLOW_PICS;
+    $r+= $FRAME_RATE*2 if $long && $SLOW_PICS;
 
     for my $n2 ( $r0+1 .. $r+2 ){
             my $out = tmp_file($n,'png' );
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, undef , $label)
+            fit_img($image, $out, int $offset, undef , $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
-            $offset+=2;
-        
+            $offset -= 0.5 if $offset>0;
     }
     print "\n";
     return @scaled;
@@ -652,7 +655,7 @@ sub fadeout_image_slow {
     my $r = $FRAME_RATE;
     my @scaled;
 
-    $r += $FRAME_RATE*5 if $SLOW_PICS;
+    $r += $FRAME_RATE*2 if $SLOW_PICS;
     for ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         fit_img($file, $out)
@@ -663,7 +666,6 @@ sub fadeout_image_slow {
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         my $brightness = 100 - int ( $n2 /$r*100);
-            warn $brightness;
         fit_img($file, $out, $n2, $brightness)
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
