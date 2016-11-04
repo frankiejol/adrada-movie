@@ -63,7 +63,7 @@ if ($AUDIO_START && !$AUDIO_FILE) {
 if ($HELP) {
     my ($me) = $0 =~ m{.*/(.*)};
     print "$me [--help] [--width=$WIDTH] [--slow] [--tidy]"
-        ." [--audio=file]"
+        ." [--audio=file] directory"
         ."\n"
         ."\t--width : output width, height is scaled in 1200x720\n"
         ."\t--slow : videos are played in slow motion at 'fps-slow' fps\n"
@@ -358,7 +358,7 @@ sub fit_img_pp {
     my $err = $in->Read($file_in);
     confess $err if $err;
 
-    print(" > Scaling $width $file_in\n")     if $VERBOSE;
+    print(" > Scaling $width $file_in\n")     if $VERBOSE>1;
     $err = $in->Scale(geometry => ${width});
     confess $err if $err;
 
@@ -367,20 +367,21 @@ sub fit_img_pp {
         my $msg = "cropping $file_in -> $size $file_out";
 
         $msg .= " -brightness $brightness" if $brightness;
-        print "$msg\n"  if $VERBOSE;
+        print "$msg\n"  if $VERBOSE>1 || $DEBUG;
 
         $in->Crop( geometry => $size );
 #        $in->Level( level => (100-$brightness));
         $in->Modulate( brightness => $brightness ) if $brightness;
     }
     
-    my $resize_x = $WIDTH - $offset;
-    my $resize_y = $HEIGHT - $offset;
+    my $resize_x = $WIDTH;
+    my $resize_y = $HEIGHT;
+
     $resize_y++ if $resize_y % 2;
 
-    $in->Resize( geometry => "${resize_x}x${resize_y}!" );
-    warn "resize ${resize_x}x${resize_y}\n" if $DEBUG;
     $in->Modulate( brightness => $brightness ) if defined $brightness;
+    $in->Resize( geometry => "${resize_x}x${resize_y}!" );
+#    warn "resize ${resize_x}x${resize_y}\n" if $DEBUG;
     
 =pod
 
@@ -651,9 +652,8 @@ sub fadeout_image_slow {
     my $r = $FRAME_RATE;
     my @scaled;
 
-    my $r_slow = 0;
-    $r_slow = $FRAME_RATE*5 if $SLOW_PICS;
-    for ( 0 .. $r + $r_slow ) {
+    $r += $FRAME_RATE*5 if $SLOW_PICS;
+    for ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         fit_img($file, $out)
                     if ! -e $out || ! -s $out;
@@ -662,8 +662,9 @@ sub fadeout_image_slow {
 
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
-        my $brightness = int ( $n2 /$r*100);
-        fit_img($file, $out, $n2, 100-$brightness)
+        my $brightness = 100 - int ( $n2 /$r*100);
+            warn $brightness;
+        fit_img($file, $out, $n2, $brightness)
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
    }
