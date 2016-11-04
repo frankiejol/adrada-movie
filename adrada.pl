@@ -32,6 +32,8 @@ my $SHOW_GROUPS;
 my $AUDIO_START;
 $VERBOSE = 1 if $ENV{TERM};
 my @PREFERRED_FORMATS = qw(yuv420p);
+my $SORT_BY_NAME = 1;
+my $SLOW_PICS;
 
 GetOptions(
      'audio=s' => \$AUDIO_FILE
@@ -42,6 +44,8 @@ GetOptions(
    ,'verbose+' => \$VERBOSE
    ,'show-dates' => \$SHOW_DATES
    ,'show-groups' => \$SHOW_GROUPS
+   ,'sort-by-name' => \$SORT_BY_NAME
+   ,'slow-pics'=> \$SLOW_PICS
         ,info  => \$INFO
        ,debug  => \$DEBUG
         ,slow  => \$SLOW
@@ -73,6 +77,7 @@ if ($HELP) {
         ."\t--info: add info about the original file in each frame\n"
         ."\t--show-dates: show found dates for the found files\n"
         ."\t--show-groups: show how we files are being grouped\n"
+        ."\t--sort-by-name: sorts the pictures and videos by name\n"
     ;
     exit;
 }
@@ -99,13 +104,16 @@ sub show_dates {
 sub exif_date {
     my $file = shift;
     my $info = exif_info($file) or return;
-    my $date = ($info->{MediaCreateDate} || $info->{CreateDate});
-    die "No date in exif ".Dumper($info) if !$date;
+    my $date = ($info->{MediaCreateDate} || $info->{CreateDate} || $info->{ModifyDate});
+       
 
+    die "No date in exif ".Dumper($info) if !$date;
     my ($y,$month,$day, $h,$min,$s) 
         = $date =~ /(\d+):(\d+):(\d+) (\d+):(\d+):(\d+)/;
 
+    return if !$date || $date =~ /^0000/;
     die "No info from '$date'" if !$y;
+    die "No month from '$date'" if !$month;
     $month--;
     my $time = timelocal($s, $min, $h, $day, $month, $y);
 
@@ -128,17 +136,21 @@ sub list_files {
     opendir my $ls,$dir or die "$! $dir";
 
     my %pic;
-    while ( my $file = readdir $ls) {
-        $file = "$dir/$file";
+    while ( my $name = readdir $ls) {
+        my $file = "$dir/$name";
         my ($ext) = $file =~ m{.*\.(\w+)$};
         next if !$ext;
         next if !$EXT_IMG{lc($ext)}
             && !$EXT_VIDEO{lc($ext)};
         next if ! -f $file;
-        my $date = exif_date($file);# if $EXT_IMG{lc($ext)};
-        if (!$date) {
-            my @stat = stat($file) or die "I can't stat $file";
-            $date = $stat[9];
+
+        my $date = $name;
+        if (!$SORT_BY_NAME) {
+            $date = exif_date($file);# if $EXT_IMG{lc($ext)};
+            if (!$date) {
+                my @stat = stat($file) or die "I can't stat $file";
+                $date = $stat[9];
+            }
         }
         $pic{$file} = { date => $date};
     }
@@ -299,7 +311,7 @@ sub convert_crop {
     push @cmd,( "png24:$file_out");
     my ($in, $out, $err);
 
-    print("cropping to $file_out\n")    if $VERBOSE>1;
+    print("cropping to $geo $file_out\n")    if $VERBOSE>1;
     print join(" ",@cmd)."\n"           if $DEBUG;
     run3(\@cmd, \$in, \$out, \$err);
     die $err if $?;
@@ -346,21 +358,29 @@ sub fit_img_pp {
     my $err = $in->Read($file_in);
     confess $err if $err;
 
-    print("Scaling $width $file_in\n")     if $VERBOSE;
+    print(" > Scaling $width $file_in\n")     if $VERBOSE;
     $err = $in->Scale(geometry => ${width});
     confess $err if $err;
 
-    if ( !$offset && !$brightness && !$label) { # crop
-        $in->Write($file_out);
-        return;
-    }
-    my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
-    my $msg = "cropping $size $file_out";
-    $msg .= " -brightness $brightness"  if $brightness;
-    print "$msg\n"  if $VERBOSE;
+    if ( $offset || $brightness || $label) { # crop
+        my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
+        my $msg = "cropping $file_in -> $size $file_out";
 
-    $in->Crop( geometry => $size );
-    $in->Modulate( brightness => $brightness );
+        $msg .= " -brightness $brightness" if $brightness;
+        print "$msg\n"  if $VERBOSE;
+
+        $in->Crop( geometry => $size );
+#        $in->Level( level => (100-$brightness));
+        $in->Modulate( brightness => $brightness ) if $brightness;
+    }
+    
+    my $resize_x = $WIDTH - $offset;
+    my $resize_y = $HEIGHT - $offset;
+    $resize_y++ if $resize_y % 2;
+
+    $in->Resize( geometry => "${resize_x}x${resize_y}!" );
+    warn "resize ${resize_x}x${resize_y}\n" if $DEBUG;
+    $in->Modulate( brightness => $brightness ) if defined $brightness;
     
 =pod
 
@@ -377,7 +397,6 @@ sub fit_img_pp {
 #    $in->Set(type => 'TrueColor');
 #    $in->Normalize( channel => 'RGB' );
     $in->Write("png24:$file_out");
-    warn "wrote $file_out";
 }
 
 sub fit_img_run {
@@ -408,7 +427,7 @@ sub fit_img_run {
     if ( $y2 != $HEIGHT || $x2 != $WIDTH || $offset || $brightness || $label) { # crop
         $x2 = $x if !$x2;
         $y2 = $y if !$y2;
-        my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
+        my $size = "${WIDTH}x${HEIGHT}+$offset+$offset!";
         my $msg = "cropping $size $file_out";
         $msg .= " -brightness $brightness"  if $brightness;
         print "$msg\n"  if $VERBOSE>1;
@@ -514,20 +533,24 @@ sub fadein_image {
 
     my @scaled;
     my $offset =0;
-    for my $n2 ( $r0 .. $r ) {
+    for my $n2 ($r0 .. $r ) {
             my $out = tmp_file($n,'png' );
-            my $brightness = int (( $r - $n2 )/$r*100);
+            my $brightness = 100 - int (( $r - $n2 )/2/$r*100);
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, -$brightness, $label)
+            fit_img($image, $out, $offset, $brightness, $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
             $offset+=2;
     }
     $r0 = $r/2;
+    $r0 = 0 if $long;
+    $r+= $FRAME_RATE if $long;
+    $r+= $FRAME_RATE*5 if $long && $SLOW_PICS;
+
     for my $n2 ( $r0+1 .. $r+2 ){
             my $out = tmp_file($n,'png' );
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, undef, $label)
+            fit_img($image, $out, $offset, undef , $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
             $offset+=2;
@@ -569,7 +592,7 @@ sub group_files {
     my @groups;
     my @images;
 
-    for my $file ( sort { $files->{$a}->{date} <=> $files->{$b}->{date} } keys %$files ) {
+    for my $file ( sort { $files->{$a}->{date} cmp $files->{$b}->{date} } keys %$files ) {
         if (is_video($file)) {
             my @images2 = @images;
             push @groups,(\@images2) if scalar @images;
@@ -610,6 +633,7 @@ sub fadeout_image {
 
     my $r = $FRAME_RATE;
     my @scaled;
+
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         my $brightness = int ( $n2 /$r*100);
@@ -626,7 +650,10 @@ sub fadeout_image_slow {
 
     my $r = $FRAME_RATE;
     my @scaled;
-    for ( 0 .. $r ) {
+
+    my $r_slow = 0;
+    $r_slow = $FRAME_RATE*5 if $SLOW_PICS;
+    for ( 0 .. $r + $r_slow ) {
         my $out = tmp_file($n,'png' );
         fit_img($file, $out)
                     if ! -e $out || ! -s $out;
@@ -636,7 +663,7 @@ sub fadeout_image_slow {
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         my $brightness = int ( $n2 /$r*100);
-        fit_img($file, $out, $n2, -$brightness)
+        fit_img($file, $out, $n2, 100-$brightness)
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
    }
