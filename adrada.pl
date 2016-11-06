@@ -34,6 +34,7 @@ $VERBOSE = 1 if $ENV{TERM};
 my @PREFERRED_FORMATS = qw(yuv420p);
 my $SORT_BY_NAME = 1;
 my $SLOW_PICS;
+my $FFMPEG;
 
 GetOptions(
      'audio=s' => \$AUDIO_FILE
@@ -165,7 +166,7 @@ sub convert_ts {
     my $video_out = tmp_file($n,'ts');
     return $video_out if -f $video_out && -s $video_out;
 
-    my @cmd = ( 'ffmpeg' );
+    my @cmd = ( $FFMPEG );
 
     push @cmd,('-r', $FPS_SLOW) if $SLOW;
 
@@ -211,7 +212,7 @@ sub join_videos {
     my $file_out = shift;
 
     my $file_inputs = create_inputs($files);
-    my @cmd = ('ffmpeg' );
+    my @cmd = ($FFMPEG );
     push @cmd,('-ss',$AUDIO_START)  if $AUDIO_START;
     push @cmd,('-i',$AUDIO_FILE ) if $AUDIO_FILE;
 #        ,'"concat:'.join("|",@$files)."'"
@@ -237,7 +238,7 @@ sub join_videos {
 
 sub video_size {
     my $file = shift;
-    my @cmd = ('ffmpeg','-i', $file);
+    my @cmd = ($FFMPEG,'-i', $file);
     my ($in, $out, $err);
     run3(\@cmd, \$in, \$out, \$err);
     chomp $err if $err;
@@ -268,7 +269,7 @@ sub create_slideshow {
 
     # avconv -ss 0 -i input.mp4 -t 60 -vcodec libx264 -acodec aac \
 #    -bsf:v h264_mp4toannexb -f mpegts -strict experimental -y file1.ts
-    my @cmd = ('ffmpeg'
+    my @cmd = ($FFMPEG
                 ,'-f','image2'
                 ,'-r',$FRAME_RATE
                 ,'-i',"$pattern\%04d.$ext"
@@ -366,16 +367,15 @@ sub fit_img_pp {
     $err = $in->Scale(geometry => ${width});
     confess $err if $err;
 
-    if ( $offset || $brightness || $label) { # crop
-        my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
-        my $msg = "cropping $file_in -> $size $file_out";
+    my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
+    my $msg = "cropping $file_in -> $size $file_out";
+    $msg .= " -brightness $brightness" if $brightness;
+    print "$msg\n"  if $VERBOSE>1 || $DEBUG;
+    $in->Crop( geometry => $size );
 
-        $msg .= " -brightness $brightness" if $brightness;
-        print "$msg\n"  if $VERBOSE>1 || $DEBUG;
-
-        $in->Crop( geometry => $size );
-#        $in->Level( level => (100-$brightness));
+    if ( $brightness || $label) { # crop
         $in->Modulate( brightness => $brightness ) if $brightness;
+        #TODO label
     }
     
     my $resize_x = $WIDTH;
@@ -656,7 +656,7 @@ sub fadeout_image_slow {
     my @scaled;
 
     $r += $FRAME_RATE*2 if $SLOW_PICS;
-    for ( 0 .. $r ) {
+    for my $count ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         fit_img($file, $out)
                     if ! -e $out || ! -s $out;
@@ -666,7 +666,7 @@ sub fadeout_image_slow {
     for my $n2 ( 0 .. $r ) {
         my $out = tmp_file($n,'png' );
         my $brightness = 100 - int ( $n2 /$r*100);
-        fit_img($file, $out, $n2, $brightness)
+        fit_img($file, $out, $n2, $brightness,"fit image slow $n2")
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
    }
@@ -756,7 +756,7 @@ sub tidy_groups {
 }
 
 sub init_encoder {
-    my @cmd = ( 'ffmpeg','-encoders');
+    my @cmd = ( $FFMPEG,'-encoders');
     my ($in, $out, $err);
 
     run3(\@cmd, \$in, \$out, \$err);
@@ -773,7 +773,7 @@ sub init_encoder {
 }
 
 sub init_format {
-    my @cmd = ( 'ffmpeg','-pix_fmts');
+    my @cmd = ( $FFMPEG,'-pix_fmts');
     my ($in, $out, $err);
 
     my %format;
@@ -793,7 +793,7 @@ sub init_format {
 sub init_drawtext {
     return if !$INFO;
 
-    my @cmd = ( 'ffmpeg','-filters');
+    my @cmd = ( $FFMPEG,'-filters');
     my ($in, $out, $err);
 
     run3(\@cmd, \$in, \$out, \$err);
@@ -811,8 +811,21 @@ sub init_drawtext {
 
 }
 
+sub init_ffmpeg {
+    my @cmd = ( 'which', 'ffmpeg');
+    my ($in, $out, $err);
+
+    run3(\@cmd, \$in, \$out, \$err);
+    $FFMPEG = $out;
+    chomp $FFMPEG;
+    die "Missing ffmpeg package\n" if !$FFMPEG;
+    die "I cant run ffmpeg in '$FFMPEG'\n" if !-e $FFMPEG;
+
+}
+
 sub init {
     mkdir $DIR_TMP if ! -e $DIR_TMP;
+    init_ffmpeg();
     init_encoder();
     init_format();
     init_drawtext();
