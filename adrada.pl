@@ -414,7 +414,6 @@ sub fix_geometry {
     if ($HEIGHT>$cury && $WIDTH<$curx ) {
         my $new_height = int($curx/$WIDTH * $HEIGHT);
         $in->Extent(height => ${new_height});
-        warn "extending to $new_height";
     }
 
     $in->Scale("${WIDTH}x${HEIGHT}");
