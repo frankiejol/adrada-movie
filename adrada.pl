@@ -36,6 +36,8 @@ my $SORT_BY_NAME = 1;
 my $SLOW_PICS;
 my $FFMPEG;
 
+my $TMP_IMAGE_EXT = 'png';
+
 GetOptions(
      'audio=s' => \$AUDIO_FILE
     ,'width=s' => \$WIDTH
@@ -47,6 +49,7 @@ GetOptions(
    ,'show-groups' => \$SHOW_GROUPS
    ,'sort-by-name' => \$SORT_BY_NAME
    ,'slow-pics'=> \$SLOW_PICS
+   ,'frame-rate=s' => \$FRAME_RATE
         ,info  => \$INFO
        ,debug  => \$DEBUG
         ,slow  => \$SLOW
@@ -319,8 +322,27 @@ sub convert_crop {
 
 }
 
-
 sub zoomin_image {
+    my ($file_in, $file_out, $offset) = @_;
+
+    my $in = Image::Magick->new();
+    my $err = $in->Read($file_in);
+    confess $err if $err;
+
+    fix_geometry($in);
+
+    # 2. crop to size-offset
+    my $geo = ($WIDTH - $offset*2)."x".($HEIGHT - $offset)
+        ."+".($offset*2)."+$offset";
+
+    $in->Crop(geometry => $geo);
+    $in->Scale(width => $WIDTH);
+
+    resize_standard($in);
+    write_image($in,$file_out);
+}
+
+sub zoomin_image_old {
     my ($file_in, $file_out, $offset) = @_;
 
     # 1. scale to size
@@ -353,40 +375,74 @@ sub fit_img_pp {
 
     confess "Offset negatiu" if $offset<0;
 
-    my ($name) = $file_in =~ m{.*/(.*)\.\w+};
-    confess "No name found in $file_in" if !$name;
-    my $file_scaled = "$DIR_TMP/$name.png";
-
-    my $width = $WIDTH;
-    $width = $width + $FRAME_RATE * 4 if defined $offset;
     my $in = Image::Magick->new();
     my $err = $in->Read($file_in);
     confess $err if $err;
 
-    print(" > Scaling $width $file_in\n")     if $VERBOSE>1;
-    $err = $in->Scale(geometry => ${width});
-    confess $err if $err;
+    fix_geometry($in);
 
     my $size = "${WIDTH}x${HEIGHT}+$offset+$offset";
     my $msg = "cropping $file_in -> $size $file_out";
-    $msg .= " -brightness $brightness" if $brightness;
+    $msg .= " -brightness $brightness" if defined $brightness;
     print "$msg\n"  if $VERBOSE>1 || $DEBUG;
     $in->Crop( geometry => $size );
 
-    if ( $brightness || $label) { # crop
-        $in->Modulate( brightness => $brightness ) if $brightness;
-        #TODO label
+    $in->Modulate( brightness => $brightness ) if defined $brightness;
+    annotate($file_out,$label)  if $label;
+
+    resize_standard($in);
+    write_image($in,$file_out);
+}
+
+sub fix_geometry {
+    my $in = shift;
+    my ($curx,$cury) = $in->Get('width','height');
+#    $in->Extent(width => ${WIDTH})    if $WIDTH<$curx;
+    if ($HEIGHT>$cury && $WIDTH<$curx ) {
+        my $new_height = int($curx/$WIDTH * $HEIGHT);
+        $in->Extent(height => ${new_height});
+        warn "extending to $new_height";
     }
-    
+
+    $in->Scale("${WIDTH}x${HEIGHT}");
+
+}
+
+sub resize_standard {
+    my $in = shift;
+
     my $resize_x = $WIDTH;
     my $resize_y = $HEIGHT;
 
     $resize_y++ if $resize_y % 2;
+    my ($curx,$cury) = $in->Get('width','height');
 
-    $in->Modulate( brightness => $brightness ) if defined $brightness;
-    $in->Resize( geometry => "${resize_x}x${resize_y}!" );
-#    warn "resize ${resize_x}x${resize_y}\n" if $DEBUG;
+
+    if ($cury < $HEIGHT) {
+        $in->Scale( height => ${resize_y} );
+    } elsif ($curx < $WIDTH ) {
+        $in->Scale( width => ${resize_x} );
+    }
+#
+}
+
+sub write_image {
+    my ($in, $file_out) = @_;
+#    $in->Set(depth => 24);
+    my %setting = ( 
+        colorspace => 'rgb'
+        ,type => 'truecolor'
+        ,alpha => 'off'
+    );
+    for my $field (keys %setting){
+        my $err = $in->Set($field => $setting{$field});
+        confess "$field => $setting{$field} $err" if $err;
+    }
+    my $err = $in->Write("$file_out");
+    confess $err if $err;
+}
     
+sub annotate {
 =pod
 
     TODO annotate image
@@ -398,60 +454,6 @@ sub fit_img_pp {
 
 =cut
 
-#    $in->Set (depth => 8);
-#    $in->Set(type => 'TrueColor');
-#    $in->Normalize( channel => 'RGB' );
-    $in->Write("png24:$file_out");
-}
-
-sub fit_img_run {
-    my ($file_in, $file_out, $offset, $brightness, $label) = @_;
-    $offset = 0 if !$offset;
-#convert -scale 800 IMG_934$i.JPG a.png ; convert a.png -crop 800x532+0+0 input$i.png
-    my ($name) = $file_in =~ m{.*/(.*)\.\w+};
-    confess "No name found in $file_in" if !$name;
-    my $file_scaled = "$DIR_TMP/$name.png";
-
-    if (! -e $file_scaled || ! -s $file_scaled ) {
-        my $width = $WIDTH;
-        $width = $width + $FRAME_RATE * 4 if defined $offset;
-        my @cmd = ('convert','-depth', $DEPTH,'-scale',$width, $file_in
-            , "png24:$file_scaled");
-        my ($in, $out, $err);
-
-        print("Scaling $file_in\n")     if $VERBOSE>1;
-        print join(" ",@cmd)."\n"           if $DEBUG;
-        run3(\@cmd, \$in, \$out, \$err);
-        die $err if $?;
-    }
-
-    my ($x, $y) = imgsize($file_scaled);
-    my ($x2, $y2) = ($x, $y);
-    $x2 = $x-1 if $x % 2;
-    $y2 = $y-1 if $y % 2;
-    if ( $y2 != $HEIGHT || $x2 != $WIDTH || $offset || $brightness || $label) { # crop
-        $x2 = $x if !$x2;
-        $y2 = $y if !$y2;
-        my $size = "${WIDTH}x${HEIGHT}+$offset+$offset!";
-        my $msg = "cropping $size $file_out";
-        $msg .= " -brightness $brightness"  if $brightness;
-        print "$msg\n"  if $VERBOSE>1;
-        my @cmd = ( 'convert');
-        
-        push @cmd,( $file_scaled,'-crop',$size
-            ,'-depth', $DEPTH);
-        push @cmd,('-fill', 'black', '-gravity','center', '-pointsize', int($HEIGHT/6)
-                    ,'-annotate','-0+0',$label)
-            if $label && $INFO;
-        # label ?
-        push @cmd,('-brightness-contrast',$brightness)   if $brightness;
-        push @cmd,("png24:$file_out");
-        my ($in, $out, $err);
-        run3(\@cmd, \$in, \$out, \$err);
-        die $err if $?;
-    } else {
-        copy($file_scaled, $file_out);
-    }
 }
 
 sub fit_img {
@@ -486,7 +488,7 @@ sub scale_images_0 {
 
     my @scaled;
     for my $file ( @$images ) {
-        my $out = tmp_file($n,'png');
+        my $out = tmp_file($n, $TMP_IMAGE_EXT);
         fit_img($file,$out)
             if ! -e $out || ! -s $out;
         push @scaled,($out);
@@ -503,16 +505,16 @@ sub effect_zoomin {
     my $offset = 0;
     for ( 0 .. $FRAME_RATE ) {
         print "." if $VERBOSE == 1;
-        my $out = tmp_file($n,'png' );
-        zoomin_image($image, $out, $offset);
-        $offset++;
+        my $out = tmp_file($n, $TMP_IMAGE_EXT );
+        zoomin_image($image, $out, $offset) if !-e $out;
+        $offset+= 0.5;
         push @scaled,($out);
     }
     for ( 0 .. $FRAME_RATE/2 ) {
         print "." if $VERBOSE == 1;
-        my $out = tmp_file($n,'png' );
-        zoomin_image($image, $out, int $offset);
-        $offset += 0.5;
+        my $out = tmp_file($n, $TMP_IMAGE_EXT );
+        zoomin_image($image, $out, int $offset) if ! -e $out;
+        $offset ++;
         push @scaled,($out);
     }
 
@@ -525,44 +527,41 @@ sub fadein_image {
     my $n = shift;
     my $long = shift;
     die "Missing group number"  if !defined $n;
-
     print "Fade in $image\n" if $VERBOSE;
+
+    my $seconds_fade = 1;
+    $seconds_fade = $seconds_fade/2 if !$long;
+    my $seconds_still = 1 if $long;
+
+    my $frames_fade = int ($seconds_fade * $FRAME_RATE);
+    my $offset = $frames_fade;
 
     my ($label) = $image =~ m{.*/(.*)};
     $label = $image if !$label;
 
-    my $r = $FRAME_RATE;
-    my $r0;
-    $r0 = $r/2;
-    $r0 = 0     if $long;
-
     my @scaled;
-    my $offset = $r-$r0;
-    for my $n2 ($r0 .. $r ) {
-            my $out = tmp_file($n,'png' );
-            my $brightness = 100 - int (( $r - $n2 )/2/$r*100);
-            print "."       if $VERBOSE== 1;
-            fit_img($image, $out, $offset, $brightness, $label)
-                    if ! -e $out || ! -s $out;
-            push @scaled,($out);
-            $offset-- if $offset>0;
-    }
-    $r0 = $r/2;
-    $r0 = 0 if $long;
-    $r+= $FRAME_RATE if $long;
-    $r+= $FRAME_RATE*2 if $long && $SLOW_PICS;
 
-    for my $n2 ( $r0+1 .. $r+2 ){
-            my $out = tmp_file($n,'png' );
+    for my $nframe ( 0 .. $frames_fade ) {
+            my $out = tmp_file($n,$TMP_IMAGE_EXT );
+            my $brightness = int ($nframe/2/$frames_fade*100);
             print "."       if $VERBOSE== 1;
-            fit_img($image, $out, int $offset, undef , $label)
+            fit_img($image, $out, 0 , $brightness, $label)
                     if ! -e $out || ! -s $out;
             push @scaled,($out);
-            $offset -= 0.5 if $offset>0;
     }
-    print "\n";
+
+    for my $nframe ( 0 .. $seconds_still * $FRAME_RATE) {
+        my $out = tmp_file($n, $TMP_IMAGE_EXT );
+        fit_img($image,$out,undef,undef)
+                    if ! -e $out || ! -s $out;
+        print "."       if $VERBOSE== 1;
+        push @scaled,($out);
+
+    }
+    print "\n"  if $VERBOSE==1;
     return @scaled;
 }
+
 sub fadein_image_slow {
     return fadein_image(@_, 1);
 }
@@ -639,7 +638,7 @@ sub fadeout_image {
     my @scaled;
 
     for my $n2 ( 0 .. $r ) {
-        my $out = tmp_file($n,'png' );
+        my $out = tmp_file($n, $TMP_IMAGE_EXT );
         my $brightness = int ( $n2 /$r*100);
         fit_img($file, $out, $n2, -$brightness)
                     if ! -e $out || ! -s $out;
@@ -657,14 +656,14 @@ sub fadeout_image_slow {
 
     $r += $FRAME_RATE*2 if $SLOW_PICS;
     for my $count ( 0 .. $r ) {
-        my $out = tmp_file($n,'png' );
+        my $out = tmp_file($n, $TMP_IMAGE_EXT);
         fit_img($file, $out)
                     if ! -e $out || ! -s $out;
         push @scaled,($out);
     }
 
     for my $n2 ( 0 .. $r ) {
-        my $out = tmp_file($n,'png' );
+        my $out = tmp_file($n,  $TMP_IMAGE_EXT);
         my $brightness = 100 - int ( $n2 /$r*100);
         fit_img($file, $out, $n2, $brightness,"fit image slow $n2")
                     if ! -e $out || ! -s $out;
