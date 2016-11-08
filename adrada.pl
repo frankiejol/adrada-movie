@@ -20,8 +20,12 @@ my $VIDEO_DURATION = 10;
 my $AUDIO_FILE;
 my $DEPTH = 12;
 my $FRAME_RATE = 24;
-my $FPS_SLOW = 18;
+
 my $SLOW;
+my $SPEED_SLOW = 0.5;
+my $FAST;
+my $SPEED_FAST = 2;
+
 my $TIDY;
 my $HELP;
 my ($VERBOSE, $DEBUG) = ( 0 );
@@ -41,7 +45,6 @@ my $TMP_IMAGE_EXT = 'png';
 GetOptions(
      'audio=s' => \$AUDIO_FILE
     ,'width=s' => \$WIDTH
-    ,'fps-slow=s' => \$FPS_SLOW
     ,'audio-start=s' => \$AUDIO_START
     ,'video-duration=s' => \$VIDEO_DURATION
    ,'verbose+' => \$VERBOSE
@@ -53,6 +56,7 @@ GetOptions(
         ,info  => \$INFO
        ,debug  => \$DEBUG
         ,slow  => \$SLOW
+        ,fast => \$FAST
         ,tidy  => \$TIDY
         ,help  => \$HELP
 ) or exit;
@@ -64,6 +68,15 @@ if ($AUDIO_START && !$AUDIO_FILE) {
     warn "ERROR: Audio start requires audio input\n";
     $HELP=1;
 }
+
+if ($SLOW && $FAST) {
+    warn "ERROR: Choose either slow or fast videos\n";
+    $HELP = 1;
+}
+
+$VIDEO_DURATION /= $SPEED_FAST if $SPEED_FAST;
+$VIDEO_DURATION /= $SPEED_SLOW if $SPEED_SLOW;
+
 if ($HELP) {
     my ($me) = $0 =~ m{.*/(.*)};
     print "$me [--help] [--width=$WIDTH] [--slow] [--tidy]"
@@ -71,8 +84,6 @@ if ($HELP) {
         ."\n"
         ."\t--width : output width, height is scaled in 1200x720\n"
         ."\t--slow : videos are played in slow motion at 'fps-slow' fps\n"
-        ."\t--fps-slow : frames per second when slow motion, defaults "
-            ."to $FPS_SLOW\n"
         ."\t--tidy : tries to group videos and pictures\n"
         ."\t--video-duration : trims videos to this duration, defaults "
             ."to $VIDEO_DURATION\n"
@@ -171,8 +182,6 @@ sub convert_ts {
 
     my @cmd = ( $FFMPEG );
 
-    push @cmd,('-r', $FPS_SLOW) if $SLOW;
-
     push @cmd,(
         '-i', $video_in
         ,'-vf','fade=in:0:20'
@@ -186,7 +195,11 @@ sub convert_ts {
     $label = $video_in if !$label;
     push @cmd,("-vf","$DRAWTEXT=text=$label:fontsize=50:fontcolor=$FONT_COLOR")   if $INFO;
     push @cmd,('-t',$VIDEO_DURATION)    if $VIDEO_DURATION;
-    push @cmd,('-an')                   if $SLOW;
+    push @cmd,('-an');
+
+    push @cmd,('-vf', "setpts=(1/$SPEED_SLOW)*PTS") if $SLOW;
+    push @cmd,('-vf', "setpts=(1/$SPEED_FAST)*PTS") if $FAST;
+
     push @cmd,(
         '-y'
         ,$video_out
