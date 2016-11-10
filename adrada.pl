@@ -24,7 +24,7 @@ my $FRAME_RATE = 24;
 my $SLOW;
 my $SPEED_SLOW = 0.5;
 my $FAST;
-my $SPEED_FAST = 2;
+my $SPEED_FAST = 1.5;
 
 my $TIDY;
 my $HELP;
@@ -51,6 +51,7 @@ GetOptions(
    ,'show-dates' => \$SHOW_DATES
    ,'show-groups' => \$SHOW_GROUPS
    ,'sort-by-name' => \$SORT_BY_NAME
+   ,'speed-fast=s' => \$SPEED_FAST
    ,'slow-pics'=> \$SLOW_PICS
    ,'frame-rate=s' => \$FRAME_RATE
         ,info  => \$INFO
